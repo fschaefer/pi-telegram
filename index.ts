@@ -129,6 +129,8 @@ interface PendingTelegramTurn {
 	queuedAttachments: QueuedAttachment[];
 	content: Array<TextContent | ImageContent>;
 	historyText: string;
+	ackReactionChatId?: number;
+	ackReactionMessageId?: number;
 }
 
 type ActiveTelegramTurn = PendingTelegramTurn;
@@ -850,6 +852,20 @@ export default function (pi: ExtensionAPI) {
 		preserveQueuedTurnsAsHistory = false;
 		const turn = await createTelegramTurn(messages, historyTurns);
 		queuedTelegramTurns.push(turn);
+
+		// Send ack reaction (👀) on the user's message
+		try {
+			await callTelegram("setMessageReaction", {
+				chat_id: firstMessage.chat.id,
+				message_id: firstMessage.message_id,
+				reaction: JSON.stringify([{ type: "emoji", emoji: "👀" }]),
+			});
+			turn.ackReactionChatId = firstMessage.chat.id;
+			turn.ackReactionMessageId = firstMessage.message_id;
+		} catch {
+			// reaction not supported or failed — non-critical
+		}
+
 		if (ctx.isIdle()) {
 			startTypingLoop(ctx, turn.chatId);
 			updateStatus(ctx);
@@ -1131,6 +1147,19 @@ export default function (pi: ExtensionAPI) {
 		}
 
 		await sendQueuedAttachments(turn);
+
+		// Remove ack reaction (👀) now that the reply is ready
+		if (turn.ackReactionChatId !== undefined && turn.ackReactionMessageId !== undefined) {
+			try {
+				await callTelegram("setMessageReaction", {
+					chat_id: turn.ackReactionChatId,
+					message_id: turn.ackReactionMessageId,
+					reaction: JSON.stringify([]),
+				});
+			} catch {
+				// non-critical
+			}
+		}
 
 		if (queuedTelegramTurns.length > 0 && !preserveQueuedTurnsAsHistory) {
 			const nextTurn = queuedTelegramTurns[0];
