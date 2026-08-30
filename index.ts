@@ -491,6 +491,17 @@ export default function (pi: ExtensionAPI) {
 		}, PREVIEW_THROTTLE_MS);
 	}
 
+	async function sendRichOrPlain(chatId: number, text: string): Promise<TelegramSentMessage> {
+		try {
+			return await callTelegram<TelegramSentMessage>("sendRichMessage", {
+				chat_id: chatId,
+				rich_message: { markdown: text },
+			});
+		} catch {
+			return await callTelegram<TelegramSentMessage>("sendMessage", { chat_id: chatId, text });
+		}
+	}
+
 	async function finalizePreview(chatId: number): Promise<boolean> {
 		const state = previewState;
 		if (!state) return false;
@@ -501,9 +512,20 @@ export default function (pi: ExtensionAPI) {
 			return false;
 		}
 		if (state.mode === "draft") {
-			await callTelegram<TelegramSentMessage>("sendMessage", { chat_id: chatId, text: finalText });
+			await sendRichOrPlain(chatId, finalText);
 			await clearPreview(chatId);
 			return true;
+		}
+		if (state.messageId !== undefined) {
+			try {
+				await callTelegram("editMessageText", {
+					chat_id: chatId,
+					message_id: state.messageId,
+					rich_message: { markdown: finalText },
+				});
+			} catch {
+				// Preview remains plain when this Telegram API path is unavailable.
+			}
 		}
 		previewState = undefined;
 		return state.messageId !== undefined;
@@ -513,10 +535,7 @@ export default function (pi: ExtensionAPI) {
 		const chunks = chunkParagraphs(text);
 		let lastMessageId: number | undefined;
 		for (const chunk of chunks) {
-			const sent = await callTelegram<TelegramSentMessage>("sendMessage", {
-				chat_id: chatId,
-				text: chunk,
-			});
+			const sent = await sendRichOrPlain(chatId, chunk);
 			lastMessageId = sent.message_id;
 		}
 		return lastMessageId;
@@ -869,7 +888,7 @@ export default function (pi: ExtensionAPI) {
 		if (ctx.isIdle()) {
 			startTypingLoop(ctx, turn.chatId);
 			updateStatus(ctx);
-			pi.sendUserMessage(turn.content);
+			await pi.sendUserMessage(turn.content, { deliverAs: "followUp" });
 		}
 	}
 
@@ -1165,7 +1184,7 @@ export default function (pi: ExtensionAPI) {
 			const nextTurn = queuedTelegramTurns[0];
 			startTypingLoop(ctx, nextTurn.chatId);
 			updateStatus(ctx);
-			pi.sendUserMessage(nextTurn.content);
+			await pi.sendUserMessage(nextTurn.content, { deliverAs: "followUp" });
 		}
 	});
 }
